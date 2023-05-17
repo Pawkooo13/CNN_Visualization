@@ -1,0 +1,653 @@
+import tensorflow as tf
+import numpy as np
+from tensorflow.keras.models import load_model
+import math
+import bpy
+from mathutils import *
+
+(X_train, Y_train), (X_test, Y_test) = tf.keras.datasets.mnist.load_data()
+
+model = load_model('C:/Users/pstrz/OneDrive/Dokumenty/Projekt_seminarium/conv.h5')
+
+def random_sample():
+    index = np.random.randint(len(X_test))
+    X = X_test[index]
+    Y = Y_test[index]
+    return (X, Y)
+
+def image_preprocessing(X):
+    X = X.reshape(1,28,28,1)
+    X = X.astype('float32')/255
+    return X
+
+
+Sample_X, Sample_Y = random_sample()
+Sample_X = image_preprocessing(Sample_X)
+
+all_layers_outputs = [layer.output for layer in model.layers[:]]
+
+activation_model = tf.keras.models.Model(inputs = model.input, outputs = all_layers_outputs)
+activations = activation_model.predict(Sample_X)
+
+conv_layers_outputs = activations[:4]
+probability = activations[6].flatten()
+
+def get_filters(n):
+    return model.layers[n].get_weights()[0]
+
+def get_filter(n_layer, n, n_filter):
+    filters = model.layers[n_layer].get_weights()[0]
+    return filters[:,:,:,n][:,:,n_filter]
+
+def get_bias(n_layer, n_bias):
+    biases = model.layers[n_layer].get_weights()[1]
+    return biases[n_bias]
+
+def generate(object, index, x, y, z, name):
+    object = object[:, :, :, index]
+    object = np.flip(object)
+    count = object.shape[1]
+    min_ = np.min(object[0].flatten()) 
+    max_ = np.max(object[0].flatten())
+    for i in range(count):
+        for j in range(count):
+            bpy.ops.mesh.primitive_cube_add(size = 1, enter_editmode = False, location = (x + j, y + 0, z + i))
+            
+            value = (object[0][i,j]-min_) / (max_-min_)
+            
+            obj = bpy.context.object
+            material = bpy.data.materials.new(name = "Color")
+            material.diffuse_color = (value, value, value, 1)
+            obj.active_material = material
+            obj.name = name
+
+def generate_filter(object, stage, index, x, y, z, name):
+    object = object[:, :, stage, index]
+    object = np.flip(object)
+    count = object.shape[1]
+    min_ = np.min(object) 
+    max_ = np.max(object)
+    for i in range(count):
+        for j in range(count):
+            bpy.ops.mesh.primitive_cube_add(size = 1, enter_editmode = False, location = (x + j, y + 0, z + i))
+            
+            value = (object[i,j]-min_) / (max_-min_)
+            
+            obj = bpy.context.object
+            material = bpy.data.materials.new(name = "Color")
+            material.diffuse_color = (value, value, value, 1)
+            obj.active_material = material
+            obj.name = name
+ 
+ 
+def generate_activation(object, x, y, z, name):
+    counter = 0
+    object = np.flip(object)
+    count = object.shape[0]
+    min_ = np.min(object) 
+    max_ = np.max(object)
+    for i in range(count):
+        for j in range(count):
+            bpy.ops.mesh.primitive_cube_add(size = 1, enter_editmode = False, location = (x + j, y + 0, z + i))
+            
+            value = (object[i,j]-min_) / (max_-min_)
+            
+            obj = bpy.context.active_object #object -> active_object
+            material = bpy.data.materials.new(name = "Color")
+            material.diffuse_color = (value, value, value, 1)
+            obj.active_material = material
+            obj.name = name
+            counter += 1
+    
+            
+def delete_objects():
+    for obj in bpy.context.scene.objects:
+        obj.select_set(True)
+    bpy.ops.object.delete()
+    
+def delete_collection():
+    for obj in bpy.context.collection.objects:
+        bpy.data.objects.remove(obj)
+    
+def delete_materials():
+    for material in bpy.data.materials:
+        bpy.data.materials.remove(material, do_unlink=True)
+    
+    
+def calc(img, kernel, a, b):
+    s = 0
+    for i in range(kernel.shape[0]):
+        for j in range(kernel.shape[1]):
+            s += kernel[i][j] * img[a+i][b+j]
+    return s
+
+
+def conv(img, kernel, bias):
+    output = []
+    dim_x = img.shape[0] - kernel.shape[0] + 1
+    dim_y = img.shape[1] - kernel.shape[1] + 1
+    for i in range(dim_x):
+        values = []
+        for j in range(dim_y):
+            value = calc(img, kernel, i, j) + bias
+            values.append(value)
+        output.append(values)
+    return output
+    
+
+def relu(x):
+    return np.maximum(x,0)
+
+
+def get_values(img, a, b):
+    values = []
+    for i in range(2):
+        for j in range(2):
+            values.append(img[a+i][b+j])  
+    return values
+
+
+def maxpool(img):
+    output = []
+    dim_x = math.floor((img.shape[0] - 2) / 2) + 1
+    dim_y = math.floor((img.shape[1] - 2) / 2) + 1
+    for i in range(dim_x):
+        max_values = []
+        for j in range(dim_y):
+            max_values.append(max(get_values(img, 2*i, 2*j)))
+        output.append(max_values)
+    return np.array(output)    
+    
+    
+def merge_objects(name):
+    for obj in bpy.context.collection.objects:
+        if name in obj.name:
+            obj.select_set(True)
+    bpy.ops.object.join()
+    obj = bpy.context.active_object
+    obj.name = name
+
+
+def delete_animation():
+    objs =  bpy.context.scene.objects
+    for obj in objs:
+        if obj.animation_data:
+            obj.animation_data.action = None
+
+            
+def appear_animation(obj, frame_start, frame_end):
+    obj.hide_render = True
+    obj.keyframe_insert(data_path = 'hide_render', frame = frame_start)
+    obj.hide_render = False
+    obj.keyframe_insert(data_path = 'hide_render', frame = frame_end)
+
+
+def shift_animation(obj, x,y,z, frame_start, frame_end):
+    obj.keyframe_insert(data_path = 'location', frame = frame_start)
+    obj.location[0] += x
+    obj.location[1] += y
+    obj.location[2] += z
+    obj.keyframe_insert(data_path = 'location', frame = frame_end)
+
+delete_animation()
+delete_materials()
+delete_objects()
+delete_collection()
+
+#######################################
+bpy.ops.object.light_add(type='AREA', align='WORLD', location=(10, 65, 30), scale=(1, 1, 1))
+bpy.context.object.data.shape = 'RECTANGLE'
+bpy.context.object.data.size = 50
+bpy.context.object.data.size_y = 150
+bpy.context.object.data.energy = 20000
+
+bpy.ops.object.light_add(type='AREA', align='WORLD', location=(10, 65, 75), scale=(1, 1, 1))
+bpy.context.object.data.shape = 'RECTANGLE'
+bpy.context.object.data.size = 50
+bpy.context.object.data.size_y = 150
+bpy.context.object.data.energy = 20000
+
+bpy.ops.object.light_add(type='AREA', align='WORLD', location=(0, 180, 150), scale=(1, 1, 1))
+bpy.context.object.data.shape = 'RECTANGLE'
+bpy.context.object.data.size = 50
+bpy.context.object.data.size_y = 60
+bpy.context.object.data.energy = 30000
+
+bpy.ops.object.light_add(type='AREA', align='WORLD', location=(0, 210, 70), scale=(1, 1, 1))
+bpy.context.object.data.shape = 'RECTANGLE'
+bpy.context.object.data.size = 20
+bpy.context.object.data.size_y = 100
+bpy.context.object.data.energy = 10000
+bpy.context.object.rotation_euler[0] = -1.5708
+#######################################
+
+
+generate(Sample_X, 0, 0,0,0, name = 'input') #input
+
+filters = get_filters(0)
+
+f1 = get_filter(0,0,0)
+f2 = get_filter(0,1,0)
+b1 = get_bias(0,0)
+b2 = get_bias(0,1)
+
+Sample_X = Sample_X.reshape(28,28)
+
+Sample_X_1 = conv(Sample_X, f1, b1)
+Sample_X_2 = conv(Sample_X, f2, b2)
+
+
+###################################################################################
+generate_filter(filters, 0, 0, 25,1,25, name = 'filter_1_1') #filtr ten pierwszy
+merge_objects('filter_1_1')
+obj = bpy.context.active_object
+interval = 0
+for z in reversed(range(26)):
+    interval = 26-z
+    obj.location = (27,1,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = 26*(interval-1)+1)
+    obj.location = (2,1,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = 26*interval)
+
+
+generate_activation(Sample_X_1, 0,20,0, 'output_filter_1_1')
+current_frame = 0
+for obj in np.flip(list(filter(lambda x: 'output_filter_1_1' in x.name, bpy.context.collection.objects))):
+    appear_animation(obj, 0, current_frame)
+    current_frame += 1
+    
+
+current_frame += 20
+for obj in reversed(list(filter(lambda x: 'output_filter_1_1' in x.name, bpy.context.collection.objects))):
+    shift_animation(obj, 0,0,40, current_frame - 20, current_frame)
+    
+
+
+filter_1_1 = bpy.context.collection.objects['filter_1_1']
+filter_1_1.keyframe_insert(data_path = 'hide_render', frame = current_frame - 20)
+filter_1_1.hide_render = True
+filter_1_1.keyframe_insert(data_path = 'hide_render', frame = current_frame)
+
+
+generate_filter(filters, 0, 1, 25,1,25, name = 'filter_1_2') #filtr ten drugi
+merge_objects('filter_1_2')
+current_frame += 10
+
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+
+interval = 0
+for z in reversed(range(26)):
+    interval = 26-z
+    obj.location = (27,1,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + (26*(interval-1)+1))
+    obj.location = (2,1,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + (26*interval))
+
+generate_activation(Sample_X_2, 0,20,0, 'output_filter_1_2')
+for obj in np.flip(list(filter(lambda x: 'output_filter_1_2' in x.name, bpy.context.collection.objects))):
+    appear_animation(obj, 0, current_frame)
+    current_frame += 1
+
+
+
+Sample_X_1 = relu(Sample_X_1) #f.aktywacji
+Sample_X_2 = relu(Sample_X_2) #f.aktywacji
+
+Sample_X_1 = maxpool(Sample_X_1) #maxpool
+Sample_X_2 = maxpool(Sample_X_2) #maxpool
+
+current_frame += 20
+
+
+generate(conv_layers_outputs[0], 0, 0,21,40, 'output_1_1') #output pierwszej warstwy, pierwszego filtra
+merge_objects('output_1_1')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,20,0, current_frame, current_frame + 20)
+
+
+generate(conv_layers_outputs[0], 1, 0,21,0, 'output_1_2') #output pierwszej warstwy, drugiego filtra
+merge_objects('output_1_2')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,20,0, current_frame, current_frame + 20)
+
+current_frame += 40
+
+
+generate(conv_layers_outputs[1], 0, 0,42,40, 'maxpool_1_1') #maxpool
+merge_objects('maxpool_1_1')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,20,0, current_frame, current_frame + 20)
+
+
+generate(conv_layers_outputs[1], 1, 0,42,0, 'maxpool_1_2') #maxpool
+merge_objects('maxpool_1_2')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,20,0, current_frame, current_frame + 20)
+
+current_frame += 20
+
+current_frame += 10
+
+########################################################################################
+
+x_1_f1 = get_filter(2, 0, 0)
+x_1_f2 = get_filter(2, 1, 0)
+
+x_2_f1 = get_filter(2, 0, 1) 
+x_2_f2 = get_filter(2, 1, 1)
+
+b1 = get_bias(2, 0)
+b2 = get_bias(2, 1)
+
+x_1_1 = np.array(conv(Sample_X_1, x_1_f1, 0)) 
+x_2_1 = np.array(conv(Sample_X_2, x_2_f1, 0)) 
+X_1 = x_1_1 + x_2_1 + b1 #output drugiej warstwy
+ 
+ 
+x_1_2 = np.array(conv(Sample_X_1, x_1_f2, 0)) 
+x_2_2 = np.array(conv(Sample_X_2, x_2_f2, 0)) 
+X_2 = x_1_2 + x_2_2 + b2 #output drugiej warstwy
+
+filters = get_filters(2)
+
+generate_filter(filters, 0, 0, 10,63,50, 'filter_2_1_1') #filtr drugiej warstwy, pierwszy
+merge_objects('filter_2_1_1')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+interval = 0
+for z in reversed(range(11)):
+    interval = 11-z
+    obj.location = (12,63,42+z)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*(interval-1)+1)
+    obj.location = (2,63,42+z)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*interval)
+
+
+generate_filter(filters, 0, 1, 10,63,10, 'filter_2_1_2') #filtr drugiej warstwy, drugi
+merge_objects('filter_2_1_2')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+interval = 0
+for z in reversed(range(11)):
+    interval = 11-z
+    obj.location = (12,63,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*(interval-1)+1)
+    obj.location = (2,63,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*interval)
+
+
+generate_activation(X_1, 0,82,20, 'output_filter_2_1')
+for obj in np.flip(list(filter(lambda x: 'output_filter_2_1' in x.name, bpy.context.collection.objects))):
+    appear_animation(obj, 0, current_frame)
+    current_frame += 1
+
+current_frame += 20
+
+for obj in reversed(list(filter(lambda x: 'output_filter_2_1' in x.name, bpy.context.collection.objects))):
+    shift_animation(obj, 0,0,20, current_frame, current_frame + 20)
+
+current_frame += 20
+
+filter_2_1_1 = bpy.context.collection.objects['filter_2_1_1']
+filter_2_1_1.keyframe_insert(data_path = 'hide_render', frame = current_frame - 20)
+filter_2_1_1.hide_render = True
+filter_2_1_1.keyframe_insert(data_path = 'hide_render', frame = current_frame)
+
+filter_2_1_2 = bpy.context.collection.objects['filter_2_1_2']
+filter_2_1_2.keyframe_insert(data_path = 'hide_render', frame = current_frame - 20)
+filter_2_1_2.hide_render = True
+filter_2_1_2.keyframe_insert(data_path = 'hide_render', frame = current_frame)
+
+
+generate_filter(filters, 1, 0, 10,63,50, 'filter_2_2_1') #filtr drugiej warstwy, pierwszy
+merge_objects('filter_2_2_1')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+interval = 0
+for z in reversed(range(11)):
+    interval = 11-z
+    obj.location = (12,63,42+z)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*(interval-1)+1)
+    obj.location = (2,63,42+z)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*interval)
+
+
+generate_filter(filters, 1, 1, 10,63,10, 'filter_2_2_2') #filtr drugiej warstwy, drugi
+merge_objects('filter_2_2_2')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+interval = 0
+for z in reversed(range(11)):
+    interval = 11-z
+    obj.location = (12,63,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*(interval-1)+1)
+    obj.location = (2,63,z+2)
+    obj.keyframe_insert(data_path = 'location', frame = current_frame + 11*interval)
+
+
+generate_activation(X_2, 0,82,20, 'output_filter_2_2')
+for obj in np.flip(list(filter(lambda x: 'output_filter_2_2' in x.name, bpy.context.collection.objects))):
+    appear_animation(obj, 0, current_frame)
+    current_frame += 1
+    
+current_frame += 20
+
+for obj in reversed(list(filter(lambda x: 'output_filter_2_2' in x.name, bpy.context.collection.objects))):
+    shift_animation(obj, 0,0,-20, current_frame, current_frame + 20)
+
+current_frame += 20
+
+#X_1 = tf.math.sigmoid(X_1) #f.aktywacji
+#X_1 = maxpool(X_1) #maxpool
+
+#X_2 = tf.math.sigmoid(X_2) #f.aktywacji
+#X_2 = maxpool(X_2) #maxpool
+
+current_frame += 20 #przerwa
+
+generate(conv_layers_outputs[2], 0, 0,83,40, 'output_2_1') #output
+merge_objects('output_2_1')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,20,0, current_frame, current_frame + 20)
+
+
+generate(conv_layers_outputs[2], 1, 0,83,0, 'output_2_2') #output
+merge_objects('output_2_2')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,20,0, current_frame, current_frame + 20)
+
+
+current_frame += 40 #+ 20 przerwy
+
+
+generate(conv_layers_outputs[3], 0, 0,104,40, 'maxpool_2_1') #maxpool
+merge_objects('maxpool_2_1')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,10,0, current_frame, current_frame + 20)
+
+
+generate(conv_layers_outputs[3], 1, 0,104,0, 'maxpool_2_2') #maxpool
+merge_objects('maxpool_2_2')
+obj = bpy.context.active_object
+appear_animation(obj, 0, current_frame)
+shift_animation(obj, 0,10,0, current_frame, current_frame + 20)
+
+current_frame += 20
+
+current_frame += 20 #przerwa
+
+output_2_1 = bpy.context.collection.objects['maxpool_2_1.024']
+output_2_2 = bpy.context.collection.objects['maxpool_2_2.024']
+
+shift_animation(output_2_1, 0,20,-17.5, current_frame, current_frame + 20)
+shift_animation(output_2_2, 0,20,17.5, current_frame, current_frame + 20)
+
+current_frame += 120 # + 100 przerwy 
+########################################################################################
+
+def generate_neurons(n, x,y,z, padding, materials, name):
+    for i in range(n):
+        bpy.ops.mesh.primitive_uv_sphere_add(radius = 1, location = (x, y, z + 1 + padding*i))
+        obj = bpy.context.active_object
+        obj.name = name + '_' + str(i+1)
+        obj.data.materials.append(materials[i])
+        
+def neurons_weights_animation(obj_name, weights, frame):
+    neurons = list(filter(lambda obj: obj_name in obj.name, bpy.context.collection.objects))
+    materials = list(filter(lambda m: obj_name in m.name, bpy.data.materials))
+    for i in range(len(neurons)):
+        value = weights[i]
+        name = materials[i].name
+        material = bpy.data.materials[name]
+        bsdf = material.node_tree.nodes['Principled BSDF']
+        bsdf.inputs['Base Color'].default_value = value
+        bsdf.inputs['Base Color'].keyframe_insert("default_value", frame = frame)
+
+def get_distance(start, end):
+    return math.sqrt(pow((end[0] - start[0]),2) + pow((end[1] - start[1]),2) + pow((end[2]-start[2]),2))
+
+def middle_points(n, x,y,z, padding):
+    coordinates = []
+    for i in range(n):
+        coordinates.append([x,y,z + 1 + padding*i])
+    return coordinates
+
+def generate_connections(start_points, end_points, materials):
+    n = 1
+    for i in range(len(start_points)):
+        for j in range(len(end_points)):
+            length = get_distance(start_points[i], end_points[j])
+            axis_z = Vector((0, 0, 1))
+            vector = Vector((end_points[j][0]-start_points[i][0], end_points[j][1]-start_points[i][1], end_points[j][2]-start_points[i][2]))
+            angle = axis_z.angle(vector)
+            bpy.ops.mesh.primitive_cylinder_add(radius=0.25, depth=length, location=start_points[i] , rotation=(-angle, 0, 0))
+            connection = bpy.context.active_object
+            connection.location = Vector(start_points[i]) + vector/2
+            connection.name = 'Connection_' + str(n)
+            connection.data.materials.append(materials[n-1])
+            n += 1
+            
+def connections_weights_animation(weights, frame):
+    connections = list(filter(lambda obj: 'Connection_' in obj.name, bpy.context.collection.objects))
+    materials = list(filter(lambda m: 'Connection_weight' in m.name, bpy.data.materials))
+    for i in range(len(connections)):
+        value = weights[i]
+        name = materials[i].name
+        material = bpy.data.materials[name]
+        bsdf = material.node_tree.nodes['Principled BSDF']
+        bsdf.inputs['Base Color'].default_value = value
+        bsdf.inputs['Base Color'].keyframe_insert("default_value", frame = frame)
+        
+        
+def create_materials(n, color, name):
+    for i in range(n):
+        mat = bpy.data.materials.new(name)
+        mat.use_nodes = True
+        node_tree = mat.node_tree
+        nodes = node_tree.nodes
+        bsdf = nodes.get("Principled BSDF") 
+        bsdf.inputs['Base Color'].default_value = color[i]
+        
+def generate_text():
+    text = bpy.data.curves.new(type="FONT", name="Text")
+    index = np.argmax(probability)
+    text.body = str(index)
+    text_obj = bpy.data.objects.new(name = "Text", object_data = text)
+    outputs_coordinates[index][1] += 2
+    outputs_coordinates[index][2] -= 1
+    text_obj.location = outputs_coordinates[index]
+    text_obj.scale = (4,4,4)
+    text_obj.rotation_euler = (math.radians(90),0,math.radians(90))
+    bpy.context.scene.collection.objects.link(text_obj)
+  
+  
+def random_weights(n):
+    weights = []
+    for i in range(n):
+        if i%2==0:
+            value = np.random.uniform(0, 0.35)
+        else:
+            value = np.random.uniform(0.65, 1)
+        weights.append((value, value, value, value))
+    return weights
+     
+def weights_to_colors(weights):
+    colors = []
+    for value in weights:
+        colors.append((value, value, value, value))
+    return colors
+    
+          
+neurons = np.array(activations[4]).flatten()
+n_neurons = len(neurons)
+n_output_neurons = len(probability)
+n_connections = n_neurons * n_output_neurons
+            
+neurons_coordinates = middle_points(n_neurons, 0,154,0, 3)
+outputs_coordinates = middle_points(n_output_neurons, 0,194,42, 6)
+
+
+output_weights = np.array(activations[6]).flatten()
+neuron_weights = model.layers[5].get_weights()[1].flatten()
+connection_weights = model.layers[6].get_weights()[0].flatten()
+neuron_weights = list(map(lambda x: (x - np.min(neuron_weights))/(np.max(neuron_weights) - np.min(neuron_weights)),neuron_weights))
+connection_weights = list(map(lambda x: (x - np.min(connection_weights))/(np.max(connection_weights) - np.min(connection_weights)),connection_weights))
+output_colors = weights_to_colors(output_weights)
+neuron_colors = weights_to_colors(neuron_weights)
+connection_colors = weights_to_colors(connection_weights)
+
+create_materials(n_connections, random_weights(n_connections), 'Connection_weight')
+create_materials(n_neurons, random_weights(n_neurons), 'Neuron_weight')
+create_materials(n_output_neurons, random_weights(n_output_neurons), 'Output_neuron_weight')
+connection_materials = list(filter(lambda material: 'Connection_weight' in material.name ,bpy.data.materials))
+neuron_materials = list(filter(lambda material: 'Neuron_weight' in material.name ,bpy.data.materials))
+output_neuron_materials = list(filter(lambda material: 'Output_neuron_weight' in material.name ,bpy.data.materials))
+
+generate_neurons(n_neurons, 0,154,0, 3, neuron_materials, 'Neuron') #flatten
+generate_neurons(n_output_neurons, 0,194,42, 6, output_neuron_materials, 'Output_neuron') #output
+generate_connections(neurons_coordinates, outputs_coordinates, connection_materials)
+
+first_layer = list(filter(lambda obj: 'Neuron' in obj.name, bpy.context.collection.objects))
+output_layer = list(filter(lambda obj: 'Output_neuron' in obj.name, bpy.context.collection.objects))
+connections = list(filter(lambda obj: 'Connection' in obj.name, bpy.context.collection.objects))
+
+
+for neuron in first_layer:
+    appear_animation(neuron, 0, current_frame)
+    current_frame += 1
+    
+for output_neuron in output_layer:
+    appear_animation(output_neuron, 0, current_frame)
+    current_frame += 1
+    
+for connection in connections:
+    appear_animation(connection, 0, current_frame)
+    current_frame += 0.1
+
+current_frame += 20
+
+for i in range(10):
+    c_weights = random_weights(n_connections)
+    n_weights = random_weights(n_neurons)
+    o_weights = random_weights(n_output_neurons)
+    connections_weights_animation(c_weights, current_frame + 5*i)
+    neurons_weights_animation('Neuron', n_weights, current_frame + 5*i)
+    neurons_weights_animation('Output_neuron', o_weights, current_frame + 5*i)
+    
+current_frame += 50
+    
+neurons_weights_animation('Neuron', neuron_colors, current_frame)
+connections_weights_animation(connection_colors , current_frame)
+neurons_weights_animation('Output_neuron', output_colors, current_frame)
+
+generate_text()
+text = bpy.context.collection.objects['Text']
+appear_animation(text, 0, current_frame)
