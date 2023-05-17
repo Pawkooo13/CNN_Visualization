@@ -1,0 +1,21 @@
+import subprocess
+import sys
+import os
+ 
+python_exe = os.path.join(sys.prefix, 'bin', 'python.exe')
+target = os.path.join(sys.prefix, 'lib', 'site-packages')
+ 
+# upgrade pip
+subprocess.call([python_exe, '-m', 'ensurepip'])
+subprocess.call([python_exe, '-m', 'pip', 'install', '--upgrade', 'pip'])
+ 
+# install chardet
+subprocess.call([python_exe, '-m', 'pip', 'install', '--upgrade', 'chardet', '-t', target])
+
+# install tensorflow package
+subprocess.call([python_exe, '-m', 'pip', 'install', '--upgrade', 'tensorflow', '-t', target])
+
+import tensorflow as tf
+
+(X_train, Y_train), (X_test, Y_test) = tf.keras.datasets.mnist.load_data()
+print(X_train.shape)
